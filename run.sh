@@ -16,8 +16,8 @@ MINIMUM_TEST_COVERAGE_PERCENT=0
 
 # install core and development Python dependencies into the currently activated venv
 function install {
-    python -m pip install --upgrade pip
-    python -m pip install --editable "$THIS_DIR/[dev]"
+    python3 -m pip install --upgrade pip
+    python3 -m pip install --editable "$THIS_DIR/[dev]"
 }
 
 # run linting, formatting, and other static code quality tools
@@ -52,7 +52,7 @@ function run-tests {
     rm -rf "$THIS_DIR/test-reports" || mkdir "$THIS_DIR/test-reports"
 
     # execute the tests, calculate coverage, and generate coverage reports in the test-reports dir
-    python -m pytest ${@:-"$THIS_DIR/tests/"} \
+    python3 -m pytest ${@:-"$THIS_DIR/tests/"} \
         --cov "${COVERAGE_DIR:-$THIS_DIR/src}" \
         --cov-report html \
         --cov-report term \
@@ -80,12 +80,12 @@ function test:wheel-locally {
 
 # serve the html test coverage report on localhost:8000
 function serve-coverage-report {
-    python -m http.server --directory "$THIS_DIR/test-reports/htmlcov/" 8000
+    python3 -m http.server --directory "$THIS_DIR/test-reports/htmlcov/" 8000
 }
 
 # build a wheel and sdist from the Python source code
 function build {
-    python -m build --sdist --wheel "$THIS_DIR/"
+    python3 -m build --sdist --wheel "$THIS_DIR/"
 }
 
 function release:test {
