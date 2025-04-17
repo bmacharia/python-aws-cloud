@@ -25,7 +25,7 @@ version = { file = "version.txt" }
 [project.optional-dependencies]
 notebooks = ["jupyterlab", "ipykernel", "rich"]
 stubs = ["boto3-stubs[s3]"]
-test = ["pytest", "pytest-cov"]
+test = ["pytest", "pytest-cov", "moto[s3]"]
 release = ["build", "twine"]
 static-code-qa = [
     "pre-commit",

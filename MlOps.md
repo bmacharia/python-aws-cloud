@@ -123,3 +123,252 @@ static-code-qa = ["pre-commit",...]
 dev = ["cloud-engineering-project[stubs,test,release,static-code-qa]"]
 
 ```
+
+# Mocking boto3 with moto
+
+What I want to accomplish is to Setup `moto` and make mock calls to AWS easiy
+
+Moto is a library that allows tests to mock out AWS Services easily
+
+The main reason is that when making calls to AWS API's I do not want to run the risk of overwriting or deleting important/production resources. In other words I do not want to break anything in production.
+
+Below is the link to moto documentation
+
+[moto docs](https://docs.getmoto.org/en/latest/docs/getting_started.html)
+
+To install Moto, and for my particular use case `pip install "moto[s3]`
+
+### So How does moto work?
+
+When I use moto to mock AWS, I am using the AWS mock decorator, the python context managers are activated, and this monkey patches any resources or clients that I creare using the Boto3 library
+
+From then on, anytime I use Boto3 client or a Boto3 resource, all actions one by that client are preformed in Moto's virtual AWS Account.
+
+When the mock AWS context manager monkey patched a Boto3 rce or a Boto3 client, none of th function calls made on the resource or the client actually result in API calls directly to AWS, or even reach AWS API endpoints. Instead the API calls are intercepted. So instead of reading from AWS or mutating resources from AWS, they mutate or read from an internal state that Moto keeps track for us, simulating an AWS account.
+
+Moto is far from perfect. For example, it does not have robust support for keeping track of whether or not the code has IAM authoirization to perform the actions it is doing. As a result Moto acts as the code had admin access to the virtual AWS account.
+
+### What is Monkey Patching in Python
+
+Monkey patching is the technique of dynamic modification of a piece of code at the run time/ during run time. This results in a change of behavoiur if code but without affacting the original source code [Referecne](https://www.tutorialspoint.com/python/python_monkey_patching.htm)
+
+## Using Moto in my Code
+
+There are two ways in which we can use moto with my tests:
+
+1. Using it as a decorator
+
+```python
+import boto3
+from moto import mock_aws
+
+
+# @ mock_aws is a decorator
+@mock_aws
+def test__upload_s3_object():
+    # Set the environment variables to point away from AWS
+    point_away_from_aws()
+
+    # 1. Create an S3 bucket
+    s3_client = boto3.client("s3")
+    s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+    # ... Rest of the code
+
+
+
+
+```
+
+Using it as a context manager `with mock_aws:...`
+
+```python
+
+import boto3
+from moto import mock_aws
+
+def test__upload_s3_object():
+ with mock_aws():
+		    # Set the environment variables to point away from AWS
+		    point_away_from_aws()
+
+		    # 1. Create an S3 bucket
+		    s3_client = boto3.client("s3")
+		    s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+     # ... Rest of the code
+
+
+
+```
+
+## Recommended Usage
+
+There are some importatn caveats to be awars of when using moto:
+
+## How do I avoid tests from mutating real AWS infrastructure
+
+I need to ensure that the mocks are actually in place
+
+I need to ensure that My tests have dummy environment variables set up:
+
+```bash
+
+export AWS_ACCESS_KEY_ID='testing'
+export AWS_SECRET_ACCESS_KEY='testing'
+export AWS_SECURITY_TOKEN='testing'
+export AWS_SESSION_TOKEN='testing'
+export AWS_DEFAULT_REGION='us-east-1'
+
+
+
+```
+
+**Do not embed credentials dirtectly into my code**. This is condidered bad practive, regarldless of whether I am using Moto or not. It also makes it possibel to configure fake credentials for teting purposes.
+
+**VERY IMPORTANT** ensure that I have my mokcs set up Before boto3 client is established. this can typically happen if I import a module with a boto3 clinet instantiated outside a function. See below about imports and how to work around this
+
+## THIS IS WRONG
+
+```python
+
+# *************** This is wrong *********************
+def test__upload_s3_object():
+  # 1. Create an S3 bucket
+  s3_client = boto3.client("s3")
+  s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+  with mock_aws():
+      # 2. Upload a file to the bucket, with a particular content type
+      object_key = "test.txt"
+      file_content = b"Hello, world!"
+      content_type = "text/plain"
+
+      upload_s3_object(
+          bucket_name=TEST_BUCKET_NAME,
+          object_key=object_key,
+          file_content=file_content,
+          content_type=content_type,
+          s3_client=s3_client,
+      )
+
+      # ... Rest of the code
+
+
+
+```
+
+## Correctly Setup moto in code:
+
+```python
+
+import os
+from uuid import uuid4
+import boto3
+from moto import mock_aws
+from files_api.s3.write_objects import upload_s3_object
+
+TEST_BUCKET_NAME = f"test-bucket-cloud-course-{str(uuid4())[:4]}"
+
+# Set the environment variables to point away from AWS
+def point_away_from_aws() -> None:
+  os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+  os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+  os.environ["AWS_SECURITY_TOKEN"] = "testing"
+  os.environ["AWS_SESSION_TOKEN"] = "testing"
+  os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+
+
+@mock_aws
+def test__upload_s3_object():
+  # Set the environment variables to point away from AWS
+  point_away_from_aws()
+
+  # 1. Create an S3 bucket
+  s3_client = boto3.client("s3")
+  s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+  # 2. Upload a file to the bucket, with a particular content type
+  object_key = "test.txt"
+  file_content = b"Hello, world!"
+  content_type = "text/plain"
+
+  upload_s3_object(
+      bucket_name=TEST_BUCKET_NAME,
+      object_key=object_key,
+      file_content=file_content,
+      content_type=content_type,
+      s3_client=s3_client,
+  )
+
+  # 3. Assert that the file was uploaded with the correct content type
+  response = s3_client.get_object(Bucket=TEST_BUCKET_NAME, Key=object_key)
+  assert response["ContentType"] == content_type
+  assert response["Body"].read() == file_content
+
+  # 4. Clean up by deleting the bucket
+  response = s3_client.list_objects_v2(Bucket=TEST_BUCKET_NAME)
+  for obj in response.get("Contents", []):
+      s3_client.delete_object(Bucket=TEST_BUCKET_NAME, Key=obj["Key"])
+
+  s3_client.delete_bucket(Bucket=TEST_BUCKET_NAME)
+
+```
+
+## About moto's Context Manager
+
+When using `moto` mock AWS decorator, each time I run it, a fresh simulated AWS account is created. What this menad is that everytime I enter a `with` block that uses the mock AWS context manager, any state(like created buckets or upladed ibjects ) is earsed once the blokc exits.
+
+## Exampel Scenario:
+
+```python
+
+import boto3
+from moto import mock_s3
+
+def test_s3_operations():
+  # First context manager scope
+  with mock_s3():
+      s3_client = boto3.client('s3', region_name='us-east-1')
+      # Create a bucket
+      s3_client.create_bucket(Bucket='my-bucket')
+      # Upload an object
+      s3_client.put_object(Bucket='my-bucket', Key='my-key', Body='my-data')
+
+  # Second context manager scope
+  with mock_s3():
+      s3_client = boto3.client('s3', region_name='us-east-1')
+      try:
+          # Attempt to read the object
+          s3_client.get_object(Bucket='my-bucket', Key='my-key')
+      except s3_client.exceptions.NoSuchBucket:
+          print("No such bucket error")
+
+test_s3_operations()
+
+
+
+
+```
+
+## Key Points to Remember
+
+- **Context Managers:** each `with mock_s3():` block creates a new clean simulated AWS account.
+- **State Reset:** When exiting a `with` block, any state created (e.g.,buckets, objects) is lost.
+- **Test Consistency:** If I need persistent state across tests(e.g., pre-created S3 bucket), ensure that your setup code runs within the same context manager scope.
+
+**Implications**
+
+- To maintain state across multiple operations in tests, ensure that all necessary setup happend wothing the same `with` block.
+
+- For common setup required by multiple tests, such as creating an S3 bucket in advance, the setup code must be included withing the same simulaed AWS account state provided by the context manager.
+
+# Moto Server
+
+This mode allows for me to run Moto as a stand alone server, which encable me to mock AWS API calls from any source, not just Python code, using Boto3
+
+- **Server Mode:** `moto_server`, I can create a local server that emulates AWS services.
+- ** Reconfigure Endpoints** Boto3 and other tools can be configured to point to this local server instead of any real AWS endpoints
+- **Cross-Language Support:** This allows for mocking interactions in any programming language, such as JavaScript, Golang, of Java, by directing API calls to the Moto Server.
+
+[Moto Server Docs](https://docs.getmoto.org/en/latest/docs/server_mode.html)
