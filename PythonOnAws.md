@@ -372,3 +372,125 @@ This mode allows for me to run Moto as a stand alone server, which encable me to
 - **Cross-Language Support:** This allows for mocking interactions in any programming language, such as JavaScript, Golang, of Java, by directing API calls to the Moto Server.
 
 [Moto Server Docs](https://docs.getmoto.org/en/latest/docs/server_mode.html)
+
+# Putting mock_awd into a pytest fixture
+
+## Testing Boto3
+
+## The Problem
+
+```python
+@mock_aws
+def test__upload_s3_object():
+    # Set the environment variables to point away from AWS
+    point_away_from_aws()
+
+    # 1. Create an S3 bucket
+    s3_client = boto3.client("s3")
+    s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+    # 2. Upload a file to the bucket, with a particular content type
+    object_key = "test.txt"
+    file_content = b"Hello, world!"
+    content_type = "text/plain"
+
+    upload_s3_object(
+        bucket_name=TEST_BUCKET_NAME,
+        object_key=object_key,
+        file_content=file_content,
+        content_type=content_type,
+        s3_client=s3_client,
+    )
+
+    # 3. Assert that the file was uploaded with the correct content type
+    response = s3_client.get_object(Bucket=TEST_BUCKET_NAME, Key=object_key)
+    assert response["ContentType"] == content_type
+    assert response["Body"].read() == file_content
+
+    # 4. Clean up by deleting the bucket
+    response = s3_client.list_objects_v2(Bucket=TEST_BUCKET_NAME)
+    for obj in response.get("Contents", []):
+        s3_client.delete_object(Bucket=TEST_BUCKET_NAME, Key=obj["Key"])
+
+    s3_client.delete_bucket(Bucket=TEST_BUCKET_NAME)
+
+```
+
+No matter the programming language or testing framework, all testing frameworks have the same strututre
+
+1. **I do some amount ot setup:** like creating an AWS S3 bucket
+2. \*\*Then, I act against the state that I setup by doing the action that I want to test: like uploading files to the bucket
+3. **Then, I inspect and assert that the action had the intended result:** here I am asserting to check if files are uploaded successfully.
+4. **And finally I clean up the state, even if I didn't get the intended result, because tests shuld be stateless**
+
+- The way that I have written the tests abouve does not follow the 4th point, mentioned above, which is bad.
+- Anytime ` # 3 Assert that the file was uploaded with the correct content type` failes, clean up does not even happen because it the program failes at that poini it will exit out of the function
+- This will cause multiple problems like costs and confusion if i was t act agains an actual test bucket in AWS
+
+- **This is where the Pytest fixtures come to solve the problem**
+
+## The Solution: use Pytest fixtures
+
+Pytest fixtures allow me to have a shared setup and teardown of testing logic, This allowd for the `ideal way` of setting up tests
+
+\*\*Test folder should look like the following below:
+
+```bash
+tests/
+├── __init__.py
+├── conftest.py # register your pytest fixtures here
+├── consts.py # define constants
+├── fixtures # define your fixtures
+│   └── mocked_aws.py
+└── unit_tests
+    ├── __init__.py
+    └── s3
+        └── test__write_objects.py
+
+
+```
+
+## Pytest fixture to mock AWS Services
+
+```python
+# tests/fixtures/mocked_aws.py
+
+"""Pytest fixture to mock AWS services."""
+
+import os
+import boto3
+import pytest
+from moto import mock_aws
+from tests.consts import TEST_BUCKET_NAME
+
+
+# Set the environment variables to point away from AWS
+def point_away_from_aws() -> None:
+    ...
+
+# Our fixture is a function and we have named it as a noun instead
+# of verb, because it is a resource that'll be provided to our tests
+# as arguments.
+
+@pytest.fixture(scope="function")
+def mocked_aws():
+    with mock_aws():
+        # Set the environment variables to point away from AWS
+        point_away_from_aws()
+
+        # 1. Create an S3 bucket
+        s3_client = boto3.client("s3")
+        s3_client.create_bucket(Bucket=TEST_BUCKET_NAME)
+
+        yield
+
+        # 4. Clean up/Teardown by deleting the bucket
+        response = s3_client.list_objects_v2(Bucket=TEST_BUCKET_NAME)
+        for obj in response.get("Contents", []):
+            s3_client.delete_object(Bucket=TEST_BUCKET_NAME, Key=obj["Key"])
+
+        s3_client.delete_bucket(Bucket=TEST_BUCKET_NAME)
+
+```
+
+- The `yield` statement in the pytest fixture allows for the existence of the fucntion to perform tests without exiting the lifecycle of the context manager. What this does is not cause any issues with `moto` while mocking AWS in the tests that hacve not exitied `mock_aws()` context manager.
